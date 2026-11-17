@@ -1867,5 +1867,253 @@ function buildDvTable(day,date,teachers,entries){
 })();
 
 </script>
+<!-- ═══ 수업체크 특이사항 연동 (읽기 전용) — 시작 ═══
+     index.html 맨 아래 </body> 바로 위에 이 블록 전체를 붙여 넣습니다. 기존 코드는 한 글자도 고치지 않습니다.
+     이 블록을 통째로 지우면 연동 전 화면으로 그대로 돌아갑니다. -->
+<style>
+#bvd-pay-strip{flex-shrink:0;background:#fffaf0;border-bottom:1px solid #fbd38d;color:#744210;font-size:11px;}
+#bvd-pay-strip.bvd-pay-quiet{background:#f7fafc;border-bottom-color:#e2e8f0;color:#718096;}
+#bvd-pay-strip[hidden]{display:none;}
+.bvd-pay-head{display:flex;align-items:center;gap:6px;width:100%;padding:5px 10px;background:none;border:none;color:inherit;font:inherit;text-align:left;cursor:pointer;}
+.bvd-pay-title{font-weight:700;white-space:nowrap;}
+.bvd-pay-pill{border-radius:9px;padding:1px 7px;background:#feebc8;color:#7b341e;font-weight:700;white-space:nowrap;}
+.bvd-pay-pill.bvd-pay-warn{background:#dd6b20;color:#fff;}
+.bvd-pay-pill.bvd-pay-none{background:#edf2f7;color:#718096;font-weight:600;}
+.bvd-pay-more{margin-left:auto;white-space:nowrap;font-weight:600;}
+.bvd-pay-list{max-height:30vh;overflow-y:auto;padding:0 10px 7px;}
+.bvd-pay-day{margin:6px 0 3px;font-weight:700;color:#7b341e;}
+.bvd-pay-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 6px;padding:5px 8px;margin-bottom:3px;border:1px solid #fbd38d;border-radius:6px;background:#fff;color:#2d3748;cursor:pointer;}
+.bvd-pay-row.bvd-pay-done{border-color:#e2e8f0;color:#718096;}
+.bvd-pay-who{font-weight:700;}
+.bvd-pay-st{border-radius:3px;padding:0 5px;font-weight:700;background:#feebc8;color:#7b341e;white-space:nowrap;}
+.bvd-pay-st.bvd-pay-warn{background:#dd6b20;color:#fff;}
+.bvd-pay-st.bvd-pay-ok{background:#e2e8f0;color:#4a5568;}
+.bvd-pay-memo{flex-basis:100%;color:#4a5568;word-break:break-all;}
+.bvd-pay-to{flex-basis:100%;font-size:10px;color:#718096;}
+.bvd-pay-chip{display:block;align-self:flex-start;max-width:100%;margin-top:2px;padding:0 4px;border-radius:3px;font-size:8px;font-weight:700;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#dd6b20;color:#fff;}
+.bvd-pay-chip.bvd-pay-ok{background:#e2e8f0;color:#4a5568;}
+.mg-card .bvd-pay-chip{display:inline-block;font-size:9px;vertical-align:middle;}
+.bvd-pay-flash{outline:3px solid #dd6b20;outline-offset:1px;}
+</style>
+<script>
+(function(){
+  if(typeof renderAll!=='function'||typeof buildCard!=='function'||typeof loadWeekAttendance!=='function'){return;}
+
+  var pay={week:'',state:'idle',items:[],error:''};   // state: idle | loading | ok | off | error
+  var reqSeq=0,rendered=false,inDayView=false;
+  var matchByEntry={},matchInfo={},cardEls={};
+  var open=false;
+  try{open=window.localStorage.getItem('bvdPayOpen')==='1';}catch(e){}
+
+  var SHORT={'당일결강-보강예정':'결강·보강예정','당일결강-보강불가':'결강·보강불가','당일결강-무연락':'결강·무연락','보강수업':'보강수업','사전취소':'사전취소'};
+  function shortSt(s){return SHORT[s]||String(s||'').replace('-','·');}
+  function curWeek(){return fmtDate(currentWeekMonday);}
+  function activeItems(){return(pay.state==='ok'&&pay.week===curWeek())?pay.items:[];}
+  function normT(s){return String(s||'').replace(/\s+/g,'').replace(/(선생님|쌤|T)$/,'');}
+  function teachersOf(e){
+    var out=[],sub=getSubTeacher(e);
+    if(sub){out.push(normT(sub));}
+    String(e.teacherName||'').split(/[\/,]/).forEach(function(t){t=normT(t);if(t&&out.indexOf(t)<0){out.push(t);}});
+    return out;
+  }
+  function nameToken(e){
+    var parts=String(e.studentName||'').split(/[_\s(]+/),i;
+    for(i=0;i<parts.length;i++){if(parts[i].length>=2&&!/^\d+F$/i.test(parts[i])&&!/^\d/.test(parts[i])){return parts[i];}}
+    return '';
+  }
+  function dayOf(dateStr){
+    var i;for(i=0;i<DAYS.length;i++){if(fmtDate(getDayDate(currentWeekMonday,DAYS[i]))===dateStr){return DAYS[i];}}
+    return '';
+  }
+  function isMakeupCard(e){var st=getStatus(e);return st==='보강완료'||/보강/.test(e.classType||'')||/보강/.test(e.studentName||'');}
+  function isAbsentCard(e){var st=getStatus(e);return st==='당일결강'||st==='보강'||st==='취소';}
+
+  // 수업체크 기록 한 건이 스케줄의 어느 카드인지 찾습니다.
+  // 수업체크에는 학생·시간이 따로 없어서, ① 메모에 적힌 학생 이름 ② 결강/보강 표시가 같은 카드 ③ 그날 그 선생님 수업이 하나뿐
+  // 일 때만 카드에 붙이고, 못 찾으면 위쪽 목록에만 보여 줍니다(엉뚱한 카드에 붙이지 않습니다).
+  function recalc(){
+    matchByEntry={};matchInfo={};
+    var items=activeItems();
+    if(!items.length){return;}
+    var vs=visibleSchedule();
+    items.forEach(function(it){
+      var day=dayOf(it.date),t=normT(it.teacher),info={entry:null,how:'',count:0};
+      matchInfo[it.id]=info;
+      if(!day||!t){return;}
+      var cands=vs.filter(function(e){return e.day===day&&teachersOf(e).indexOf(t)>=0;});
+      info.count=cands.length;
+      if(!cands.length){return;}
+      var memo=String(it.memo||''),hits=cands.filter(function(e){var tk=nameToken(e);return tk&&memo.indexOf(tk)>=0;});
+      if(hits.length===1){info.entry=hits[0];info.how='name';}
+      else{
+        var pool=hits.length>1?hits:cands,hint=[];
+        if(it.status==='보강수업'){hint=pool.filter(isMakeupCard);}
+        else if(/^당일결강/.test(it.status)||it.status==='사전취소'){hint=pool.filter(isAbsentCard);}
+        if(hint.length===1){info.entry=hint[0];info.how='status';}
+        else if(cands.length===1){info.entry=cands[0];info.how='only';}
+      }
+      if(info.entry){(matchByEntry[info.entry.id]=matchByEntry[info.entry.id]||[]).push(it);}
+    });
+  }
+
+  function chipFor(list){
+    var warn=list.some(function(it){return it.needsReview;});
+    var chip=document.createElement('span');
+    chip.className='bvd-pay-chip'+(warn?'':' bvd-pay-ok');
+    chip.textContent='체크 '+list.map(function(it){return shortSt(it.status);}).join(', ')+(warn?'':' ✓');
+    chip.title=list.map(function(it){return it.teacher+'T · '+it.type+' · '+shortSt(it.status)+(it.needsReview?' · 확인필요':'');}).join('\n');
+    return chip;
+  }
+
+  // ── 기존 함수 감싸기 (원래 함수는 그대로 부르고, 끝난 뒤에 표시만 덧붙입니다) ──
+  var _buildCard=buildCard;
+  buildCard=function(entry,di,fillCell){
+    var card=_buildCard(entry,di,fillCell);
+    try{
+      if(!inDayView&&entry&&matchByEntry[entry.id]){
+        card.appendChild(chipFor(matchByEntry[entry.id]));
+        (cardEls[entry.id]=cardEls[entry.id]||[]).push(card);
+      }
+    }catch(e){}
+    return card;
+  };
+  if(typeof buildDvTable==='function'){
+    // '이미지 저장'용 하루 보기에는 표시하지 않습니다(밖으로 나가는 이미지에 수업체크 내용이 실리지 않도록).
+    var _buildDvTable=buildDvTable;
+    buildDvTable=function(){inDayView=true;try{return _buildDvTable.apply(this,arguments);}finally{inDayView=false;}};
+  }
+  var _renderWeeklyGrid=renderWeeklyGrid;
+  renderWeeklyGrid=function(){try{cardEls={};recalc();}catch(e){}return _renderWeeklyGrid.apply(this,arguments);};
+  var _renderMobileGrid=renderMobileGrid;
+  renderMobileGrid=function(){
+    var r=_renderMobileGrid.apply(this,arguments);
+    try{
+      recalc();
+      var cards=document.querySelectorAll('#mobile-grid .mg-card'),list=[],vs=visibleSchedule(),ti;
+      for(ti=0;ti<TIMES.length;ti++){vs.forEach(function(e){if(e.day===mobileDay&&e.time===TIMES[ti]){list.push(e);}});}
+      if(cards.length===list.length){
+        list.forEach(function(e,i){
+          if(!matchByEntry[e.id]){return;}
+          var host=cards[i].querySelector('.mg-sn')||cards[i];
+          host.appendChild(document.createTextNode(' '));host.appendChild(chipFor(matchByEntry[e.id]));
+        });
+      }
+    }catch(e){}
+    return r;
+  };
+  var _renderAll=renderAll;
+  renderAll=function(){
+    try{recalc();}catch(e){}
+    var r=_renderAll.apply(this,arguments);
+    rendered=true;
+    try{renderStrip();}catch(e){}
+    return r;
+  };
+  var _loadWeekAttendance=loadWeekAttendance;
+  loadWeekAttendance=function(){loadPay();return _loadWeekAttendance.apply(this,arguments);};
+
+  // ── 수업체크에서 이번 주 특이사항 가져오기 (실패해도 스케줄에는 영향 없음) ──
+  var PAY_URL='https://vchztldfletlvrvhsgtv.supabase.co/rest/v1/rpc/sched_payroll_notes';
+  var PAY_KEY='sb_publishable_hilDvFthdIXFJ5nOaQVXvQ_KAsXu3uw';
+  function loadPay(){
+    var wk=curWeek(),seq=++reqSeq;
+    if(pay.week!==wk){pay={week:wk,state:'loading',items:[],error:''};}
+    function done(next){
+      if(seq!==reqSeq||wk!==curWeek()){return;}
+      // 잠깐 못 불러온 경우에는 방금까지 보이던 내용을 지우지 않습니다.
+      if(next.state==='error'&&pay.state==='ok'&&pay.week===wk){return;}
+      pay=next;
+      if(rendered){try{renderAll();}catch(e){}}
+    }
+    try{
+      // 수업체크와 같은 Supabase 에서 이번 주 특이사항만 읽어 옵니다(읽기 전용, 금액은 오지 않습니다).
+      fetch(PAY_URL,{method:'POST',headers:{'Content-Type':'application/json','apikey':PAY_KEY,'Authorization':'Bearer '+PAY_KEY},body:JSON.stringify({week:wk})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d&&d.ok&&Array.isArray(d.items)){done({week:wk,state:'ok',items:d.items,error:''});}
+        else{done({week:wk,state:'error',items:[],error:(d&&(d.error||d.message))||'응답을 읽지 못했습니다'});}
+      },function(err){
+        done({week:wk,state:'error',items:[],error:String(err&&(err.message||err))});
+      });
+    }catch(e){done({week:wk,state:'error',items:[],error:String(e)});}
+  }
+
+  // ── 위쪽 요약 줄 ──
+  function el(tag,cls,text){var x=document.createElement(tag);if(cls){x.className=cls;}if(text!==undefined){x.textContent=text;}return x;}
+  function stripHost(){
+    var s=document.getElementById('bvd-pay-strip');
+    if(!s){
+      s=el('div');s.id='bvd-pay-strip';
+      var stats=document.getElementById('stats');
+      if(stats&&stats.parentNode){stats.parentNode.insertBefore(s,stats.nextSibling);}else{document.body.insertBefore(s,document.body.firstChild);}
+    }
+    return s;
+  }
+  function entryLabel(e){return e.studentName+' '+e.time;}
+  function flash(it){
+    var info=matchInfo[it.id];if(!info||!info.entry){return;}
+    try{
+      if(isMobile()){
+        var day=dayOf(it.date);
+        if(day&&day!==mobileDay){mobileDay=day;if(typeof renderDayTabs==='function'){renderDayTabs();}renderMobileGrid();}
+        return;
+      }
+      (cardEls[info.entry.id]||[]).forEach(function(c){
+        if(c.scrollIntoView){c.scrollIntoView({block:'center',inline:'center'});}
+        c.classList.add('bvd-pay-flash');setTimeout(function(){c.classList.remove('bvd-pay-flash');},1800);
+      });
+    }catch(e){}
+  }
+  function renderStrip(){
+    var s=stripHost();s.innerHTML='';
+    if(pay.state==='off'||pay.state==='idle'||pay.week!==curWeek()){s.hidden=true;return;}
+    s.hidden=false;
+    var head=el('button','bvd-pay-head');head.type='button';
+    head.appendChild(el('span','bvd-pay-title','수업체크 특이사항'));
+    if(pay.state==='loading'){s.className='bvd-pay-quiet';head.appendChild(el('span','bvd-pay-pill bvd-pay-none','불러오는 중'));s.appendChild(head);return;}
+    if(pay.state==='error'){
+      s.className='bvd-pay-quiet';
+      head.appendChild(el('span','bvd-pay-pill bvd-pay-none','수업체크에서 불러오지 못했습니다 · 눌러서 다시 시도'));
+      head.title=pay.error;head.onclick=function(){loadPay();renderStrip();};
+      s.appendChild(head);return;
+    }
+    var items=pay.items,today=fmtDate(new Date()),tItems=items.filter(function(it){return it.date===today;});
+    var need=items.filter(function(it){return it.needsReview;}).length;
+    if(!items.length){s.className='bvd-pay-quiet';head.appendChild(el('span','bvd-pay-pill bvd-pay-none',(isCurrentWeek()?'이번 주':'이 주')+' 없음'));head.style.cursor='default';s.appendChild(head);return;}
+    s.className='';
+    if(isCurrentWeek()){head.appendChild(el('span','bvd-pay-pill'+(tItems.length?'':' bvd-pay-none'),'오늘 '+tItems.length+'건'));}
+    head.appendChild(el('span','bvd-pay-pill',(isCurrentWeek()?'이번 주 ':'이 주 ')+items.length+'건'));
+    if(need){head.appendChild(el('span','bvd-pay-pill bvd-pay-warn','확인필요 '+need));}
+    head.appendChild(el('span','bvd-pay-more',open?'접기 ▴':'펼치기 ▾'));
+    head.setAttribute('aria-expanded',open?'true':'false');
+    head.onclick=function(){open=!open;try{window.localStorage.setItem('bvdPayOpen',open?'1':'0');}catch(e){}renderStrip();};
+    s.appendChild(head);
+    if(!open){return;}
+    var list=el('div','bvd-pay-list'),lastDate='';
+    var ordered=items.filter(function(it){return it.date===today;}).concat(items.filter(function(it){return it.date!==today;}));
+    ordered.forEach(function(it){
+      if(it.date!==lastDate){
+        lastDate=it.date;
+        var p=it.date.split('-');
+        list.appendChild(el('div','bvd-pay-day',(dayOf(it.date)||'')+'요일 '+Number(p[1])+'/'+Number(p[2])+(it.date===today?' · 오늘':'')));
+      }
+      var row=el('div','bvd-pay-row'+(it.needsReview?'':' bvd-pay-done'));
+      row.appendChild(el('span','bvd-pay-who',it.teacher+'T'));
+      row.appendChild(el('span','',it.type+(it.headcount?' · '+it.headcount+'명':'')));
+      row.appendChild(el('span','bvd-pay-st'+(it.needsReview?' bvd-pay-warn':''),shortSt(it.status)));
+      row.appendChild(el('span','bvd-pay-st bvd-pay-ok',it.needsReview?'확인필요':(it.verified?'확인완료':'확인 불필요')));
+      // 메모 내용은 스케줄에 보여 주지 않습니다(자세한 내용은 수업체크에서 확인). 맞는 카드를 찾는 데만 씁니다.
+      var info=matchInfo[it.id]||{};
+      row.appendChild(el('span','bvd-pay-to',info.entry?('→ 카드: '+entryLabel(info.entry)+(info.how==='only'?' (그날 이 선생님 수업이 하나)':info.how==='status'?' (결강·보강 표시로 찾음)':' (메모의 학생 이름으로 찾음)'))
+        :(info.count?'→ 카드를 특정하지 못했습니다 (그날 '+it.teacher+'T 수업 '+info.count+'개)':'→ 스케줄에 그날 '+it.teacher+'T 수업이 없습니다')));
+      row.onclick=function(){flash(it);};
+      list.appendChild(row);
+    });
+    s.appendChild(list);
+  }
+})();
+</script>
+<!-- ═══ 수업체크 특이사항 연동 — 끝 ═══ -->
+
 </body>
 </html>
