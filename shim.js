@@ -46,7 +46,7 @@
   window.google.script = { run: runner(null, null), host: { close: function () {}, setHeight: function () {}, setWidth: function () {} } };
 
   // ===== 화면 보기 선택 (PC 화면 / 모바일 화면) =====
-  // 폰에서만 오른쪽 아래에 전환 버튼이 보입니다. 기본은 예전과 같은 PC 화면입니다.
+  // 폰에서만 왼쪽 아래에 전환 버튼이 보입니다. 기본은 예전과 같은 PC 화면입니다.
   // 선택은 그 폰(브라우저)에 저장되어 다음에 열어도 그대로 유지됩니다.
   var VIEW_KEY = 'bvd_sched_view';
   var PC_VIEWPORT = 'width=980';
@@ -75,7 +75,7 @@
     var b = document.createElement('button');
     b.type = 'button';
     b.textContent = view === 'pc' ? '📱 모바일 화면으로' : '🖥 PC 화면으로';
-    b.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:99999;padding:' + (view === 'pc' ? '14px 22px' : '8px 12px') +
+    b.style.cssText = 'position:fixed;left:10px;bottom:10px;z-index:99999;padding:' + (view === 'pc' ? '14px 22px' : '8px 12px') +
       ';font-size:' + (view === 'pc' ? '26px' : '13px') + ';font-weight:700;border:none;border-radius:999px;background:rgba(17,17,17,0.82);color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.3);';
     b.onclick = function () { setView(view === 'pc' ? 'mobile' : 'pc'); location.reload(); };
     document.body.appendChild(b);
