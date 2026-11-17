@@ -44,4 +44,40 @@
 
   window.google = window.google || {};
   window.google.script = { run: runner(null, null), host: { close: function () {}, setHeight: function () {}, setWidth: function () {} } };
+
+  // ===== 화면 보기 선택 (PC 화면 / 모바일 화면) =====
+  // 폰에서만 오른쪽 아래에 전환 버튼이 보입니다. 기본은 예전과 같은 PC 화면입니다.
+  // 선택은 그 폰(브라우저)에 저장되어 다음에 열어도 그대로 유지됩니다.
+  var VIEW_KEY = 'bvd_sched_view';
+  var PC_VIEWPORT = 'width=980';
+  var MOBILE_VIEWPORT = 'width=device-width, initial-scale=1.0, user-scalable=no';
+  var isPhone = Math.min(screen.width || 9999, screen.height || 9999) <= 820;
+  function getView() { try { return localStorage.getItem(VIEW_KEY) || 'pc'; } catch (e) { return 'pc'; } }
+  function setView(v) { try { localStorage.setItem(VIEW_KEY, v); } catch (e) {} }
+  var view = isPhone ? getView() : 'mobile';
+  function applyViewport(meta) {
+    if (!meta || !isPhone) return;
+    var want = view === 'pc' ? PC_VIEWPORT : MOBILE_VIEWPORT;
+    if (meta.getAttribute('content') !== want) meta.setAttribute('content', want);
+  }
+  if (isPhone && view === 'pc') {
+    try {
+      var mo = new MutationObserver(function () {
+        var m = document.querySelector('meta[name="viewport"]');
+        if (m) { applyViewport(m); mo.disconnect(); }
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    applyViewport(document.querySelector('meta[name="viewport"]'));
+    if (!isPhone) return;
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = view === 'pc' ? '📱 모바일 화면으로' : '🖥 PC 화면으로';
+    b.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:99999;padding:' + (view === 'pc' ? '14px 22px' : '8px 12px') +
+      ';font-size:' + (view === 'pc' ? '26px' : '13px') + ';font-weight:700;border:none;border-radius:999px;background:rgba(17,17,17,0.82);color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.3);';
+    b.onclick = function () { setView(view === 'pc' ? 'mobile' : 'pc'); location.reload(); };
+    document.body.appendChild(b);
+  });
 })();
